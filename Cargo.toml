@@ -13,3 +13,6 @@ keywords = ["ndn", "named", "data", "networking", "ndnlp"]
 bytes = "1.5.0"
 ndn-protocol = { version = "0.3.0", path = "../ndn-protocol" }
 ndn-tlv = { version = "0.3.0", path = "../ndn-tlv" }
+
+[dev-dependencies]
+hex = "0.4.3"
