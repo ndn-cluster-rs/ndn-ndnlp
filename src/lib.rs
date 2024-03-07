@@ -1,6 +1,6 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use ndn_protocol::{Data, Interest};
-use ndn_tlv::{find_tlv, GenericTlv, Tlv, TlvDecode, TlvEncode, VarNum};
+use ndn_tlv::{find_tlv, GenericTlv, NonNegativeInteger, Tlv, TlvDecode, TlvEncode, VarNum};
 
 #[derive(Tlv, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Packet {
@@ -14,17 +14,19 @@ pub struct UnknownHeader(pub GenericTlv<Bytes>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LpPacket {
-    sequence: Option<Sequence>,
-    nack: Option<Nack>,
-    other_headers: Vec<UnknownHeader>,
-    fragment: Option<Fragment>,
+    pub sequence: Option<Sequence>,
+    pub frag_index: Option<FragIndex>,
+    pub frag_count: Option<FragCount>,
+    pub nack: Option<Nack>,
+    pub other_headers: Vec<UnknownHeader>,
+    pub fragment: Option<Fragment>,
     // Any modification here likely needs an adjustment to Tlv/TlvDecode/TlvEncode impls
 }
 
 #[derive(Tlv, Debug, Clone, PartialEq, Eq, Hash)]
 #[tlv(80)]
 pub struct Fragment {
-    data: Bytes,
+    pub data: Bytes,
 }
 
 #[derive(Tlv, Debug, Clone, PartialEq, Eq, Hash)]
@@ -32,8 +34,23 @@ pub struct Fragment {
 pub struct Sequence(pub Bytes);
 
 #[derive(Tlv, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[tlv(82)]
+pub struct FragIndex(pub NonNegativeInteger);
+
+#[derive(Tlv, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[tlv(83)]
+pub struct FragCount(pub NonNegativeInteger);
+
+#[derive(Tlv, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[tlv(800)]
 pub struct Nack;
+
+impl UnknownHeader {
+    pub fn is_critical(&self) -> bool {
+        let typ = self.0.typ.value();
+        !(typ >= 800 && typ <= 959 && typ & 0b11 == 0)
+    }
+}
 
 impl Packet {
     pub fn make_nack<T>(interest: Interest<T>) -> Self
@@ -42,6 +59,8 @@ impl Packet {
     {
         Self::LpPacket(LpPacket {
             sequence: None,
+            frag_index: None,
+            frag_count: None,
             nack: Some(Nack),
             other_headers: vec![],
             fragment: Some(Fragment {
@@ -52,8 +71,20 @@ impl Packet {
 }
 
 impl LpPacket {
+    pub fn seq_num(&self) -> Option<Bytes> {
+        self.sequence.as_ref().map(|x| x.0.clone())
+    }
+
+    pub fn frag_info(&self) -> Option<(NonNegativeInteger, NonNegativeInteger)> {
+        Some((self.frag_index?.0, self.frag_count?.0))
+    }
+
     pub fn is_nack(&self) -> bool {
         self.nack.is_some()
+    }
+
+    pub fn other_headers(&self) -> &Vec<UnknownHeader> {
+        &self.other_headers
     }
 
     pub fn fragment(&self) -> Option<Bytes> {
@@ -65,7 +96,12 @@ impl Tlv for LpPacket {
     const TYP: usize = 100;
 
     fn inner_size(&self) -> usize {
-        self.sequence.size() + self.nack.size() + self.other_headers.size() + self.fragment.size()
+        self.sequence.size()
+            + self.frag_index.size()
+            + self.frag_count.size()
+            + self.nack.size()
+            + self.other_headers.size()
+            + self.fragment.size()
     }
 }
 
@@ -92,6 +128,8 @@ impl TlvDecode for LpPacket {
 
         // 80-100 headers
         let sequence = Option::<Sequence>::decode(&mut inner_data)?;
+        let frag_index = Option::<FragIndex>::decode(&mut inner_data)?;
+        let frag_count = Option::<FragCount>::decode(&mut inner_data)?;
 
         while inner_data.has_remaining() {
             let mut header_cur = inner_data.clone();
@@ -120,6 +158,8 @@ impl TlvDecode for LpPacket {
         bytes.advance(bytes.remaining() - cur.remaining());
         Ok(Self {
             sequence,
+            frag_index,
+            frag_count,
             nack,
             other_headers,
             fragment,
@@ -138,6 +178,8 @@ impl TlvEncode for LpPacket {
 
         // 80-100 headers
         bytes.put(self.sequence.encode());
+        bytes.put(self.frag_index.encode());
+        bytes.put(self.frag_count.encode());
         for header in &headers {
             if header.0.typ.value() <= 100 {
                 bytes.put(header.encode());
