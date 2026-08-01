@@ -1,51 +1,96 @@
+#![warn(missing_docs)]
+//! A partial implementation of NDNLPv2, the link-layer protocol NDN
+//! packets are framed in before being sent over a transport (a TCP/Unix
+//! socket, Ethernet, etc).
+//!
+//! [`Packet`] is the union of everything that can appear directly on the
+//! wire: a bare [`Interest`], a bare [`Data`], or an NDNLPv2 [`LpPacket`].
+//! An `LpPacket` wraps a fragment of an Interest or Data with link-layer
+//! metadata -- a sequence number and fragment index/count for reassembly
+//! ([`Sequence`], [`FragIndex`], [`FragCount`], [`Fragment`]) -- or carries
+//! a link-layer [`Nack`] instead of a fragment.
+//!
+//! This crate only implements the parts of NDNLPv2 that
+//! [`ndn-app`](https://crates.io/crates/ndn-app) needs, not the full
+//! protocol. Headers it doesn't have a dedicated type for are preserved as
+//! [`UnknownHeader`] rather than dropped.
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use ndn_protocol::{Data, Interest};
 use ndn_tlv::{find_tlv, GenericTlv, NonNegativeInteger, Tlv, TlvDecode, TlvEncode, VarNum};
 
+/// Anything that can appear directly on the wire: a bare Interest or Data
+/// packet, or an NDNLPv2 link-layer packet.
 #[derive(Tlv, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Packet {
+    /// An Interest packet, its application parameters still encoded as raw bytes.
     Interest(Interest<Bytes>),
+    /// A Data packet, its content still encoded as raw bytes.
     Data(Data<Bytes>),
+    /// An NDNLPv2 link-layer packet.
     LpPacket(LpPacket),
 }
 
+/// An NDNLPv2 header this crate doesn't have a dedicated type for
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UnknownHeader(pub GenericTlv<Bytes>);
 
+/// An NDNLPv2 link-layer packet: a fragment of an Interest or Data (or a
+/// link-layer [`Nack`]), plus the metadata needed to reassemble and
+/// deliver it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LpPacket {
+    /// This fragment's sequence number, shared by every fragment of the
+    /// same original packet.
     pub sequence: Option<Sequence>,
+    /// This fragment's 0-based position among [`FragCount`] total fragments.
     pub frag_index: Option<FragIndex>,
+    /// How many fragments the original packet was split into.
     pub frag_count: Option<FragCount>,
+    /// Set if this packet carries a link-layer Nack rather than fragment data.
     pub nack: Option<Nack>,
+    /// Headers this implementation doesn't have a dedicated type for
     pub other_headers: Vec<UnknownHeader>,
+    /// The (possibly partial) encoded Interest or Data this packet carries.
     pub fragment: Option<Fragment>,
     // Any modification here likely needs an adjustment to Tlv/TlvDecode/TlvEncode impls
 }
 
+/// One (possibly the only) fragment of an encoded Interest or Data packet.
 #[derive(Tlv, Debug, Clone, PartialEq, Eq, Hash)]
 #[tlv(80)]
 pub struct Fragment {
+    /// The fragment's raw bytes.
     pub data: Bytes,
 }
 
+/// A sequence number shared by every fragment of the same original packet,
+/// used to group them back together on reassembly.
 #[derive(Tlv, Debug, Clone, PartialEq, Eq, Hash)]
 #[tlv(81)]
 pub struct Sequence(pub Bytes);
 
+/// This fragment's 0-based position among [`FragCount`] total fragments.
 #[derive(Tlv, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[tlv(82)]
 pub struct FragIndex(pub NonNegativeInteger);
 
+/// How many fragments the original packet was split into.
 #[derive(Tlv, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[tlv(83)]
 pub struct FragCount(pub NonNegativeInteger);
 
+/// A marker indicating an [`LpPacket`] carries a link-layer negative
+/// acknowledgement rather than fragment data.
 #[derive(Tlv, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[tlv(800)]
 pub struct Nack;
 
 impl UnknownHeader {
+    /// Returns whether this header falls outside NDNLPv2's ignorable
+    /// header range (TLV types 800-959, in steps of 4). A critical header
+    /// this crate doesn't recognize is a decode error rather than
+    /// something that's safe to silently skip.
     pub fn is_critical(&self) -> bool {
         let typ = self.0.typ.value();
         !(typ >= 800 && typ <= 959 && typ & 0b11 == 0)
@@ -53,6 +98,9 @@ impl UnknownHeader {
 }
 
 impl Packet {
+    /// Wraps `interest`'s encoded bytes in an [`LpPacket`] carrying a
+    /// link-layer [`Nack`] -- NDNLPv2's way of telling the next hop that
+    /// this Interest couldn't be forwarded further.
     pub fn make_nack<T>(interest: Interest<T>) -> Self
     where
         T: TlvEncode,
@@ -71,22 +119,29 @@ impl Packet {
 }
 
 impl LpPacket {
+    /// This packet's sequence number, if set.
     pub fn seq_num(&self) -> Option<Bytes> {
         self.sequence.as_ref().map(|x| x.0.clone())
     }
 
+    /// This fragment's `(index, count)` position among the original
+    /// packet's fragments, if both are set.
     pub fn frag_info(&self) -> Option<(NonNegativeInteger, NonNegativeInteger)> {
         Some((self.frag_index?.0, self.frag_count?.0))
     }
 
+    /// Whether this packet carries a link-layer Nack.
     pub fn is_nack(&self) -> bool {
         self.nack.is_some()
     }
 
+    /// Headers this implementation doesn't recognize, preserved as-is.
     pub fn other_headers(&self) -> &Vec<UnknownHeader> {
         &self.other_headers
     }
 
+    /// The raw bytes of the (possibly partial) Interest or Data this
+    /// packet carries, if any.
     pub fn fragment(&self) -> Option<Bytes> {
         self.fragment.as_ref().map(|x| x.data.clone())
     }
