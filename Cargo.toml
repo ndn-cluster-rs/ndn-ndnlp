@@ -1,9 +1,10 @@
 [package]
 name = "ndn-ndnlp"
 description = "NDN Link Protocol"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/ndn-cluster-rs/ndn-ndnlp"
 categories = ["network-programming", "parsing"]
 keywords = ["ndn", "named", "data", "networking", "ndnlp"]
 
@@ -11,8 +12,8 @@ keywords = ["ndn", "named", "data", "networking", "ndnlp"]
 
 [dependencies]
 bytes = "1.5.0"
-ndn-protocol = { version = "0.4.0", path = "../ndn-protocol" }
-ndn-tlv = { version = "0.4.0", path = "../ndn-tlv" }
+ndn-protocol = { version = "0.4.1", path = "../ndn-protocol" }
+ndn-tlv = { version = "0.4.1", path = "../ndn-tlv" }
 
 [dev-dependencies]
 hex = "0.4.3"
